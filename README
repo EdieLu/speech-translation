@@ -1,0 +1,12 @@
+Speech translation
+---------------------------
+with Acous/En encoder + En/De decoder
+connection point: encoder output (type=embedding passing)
+
+modes       data
+---------------------
+ASR         ASR
+ASR_AE      ASR
+MT          MT
+MT_AE       MT
+ST_ASR      3WAY
