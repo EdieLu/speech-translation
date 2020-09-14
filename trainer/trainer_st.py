@@ -321,6 +321,12 @@ class Trainer_ST(Trainer):
 		# loop over epochs
 		for epoch in range(start_epoch, n_epochs + 1):
 
+			# update lr
+			if self.lr_warmup_steps != 0:
+				self.optimizer.optimizer = self.lr_scheduler(
+					self.optimizer.optimizer, step, init_lr=self.learning_rate_init,
+					peak_lr=self.learning_rate, warmup_steps=self.lr_warmup_steps)
+			# print lr
 			for param_group in self.optimizer.optimizer.param_groups:
 				log.info('epoch:{} lr: {}'.format(epoch, param_group['lr']))
 				lr_curr = param_group['lr']

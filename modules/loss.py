@@ -214,7 +214,7 @@ class KLDivLoss(Loss):
 
 	def eval_batch(self, logq, logp):
 		p = torch.exp(logp)
-		# outputs: logp, target: p
+		# inputs: logq; target: p
 		self.acc_loss += torch.sum(self.criterion(logq, p))
 
 	def eval_batch_with_mask(self, logq, logp, mask):
@@ -247,5 +247,3 @@ class MSELoss(Loss):
 	def eval_batch_with_mask(self, input, target, mask):
 		masked_loss = self.criterion(input, target).sum(dim=1).masked_select(mask)
 		self.acc_loss += masked_loss.sum()
-
-	

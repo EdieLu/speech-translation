@@ -141,7 +141,7 @@ class Trainer_MT(Trainer):
 					# preds_hyp_de = preds_de[:,:-1]
 
 					# [run-FR] to get true stats
-					out_dict = model.forward_eval(src=src_ids, mode='AE_MT', use_gpu=self.use_gpu)
+					out_dict = model.forward_eval(src=src_ids, mode='MT', use_gpu=self.use_gpu)
 					preds_de = out_dict['preds_mt']
 					logps_de = out_dict['logps_mt']
 					logps_hyp_de = logps_de[:,1:,:]
@@ -306,6 +306,12 @@ class Trainer_MT(Trainer):
 		# loop over epochs
 		for epoch in range(start_epoch, n_epochs + 1):
 
+			# update lr
+			if self.lr_warmup_steps != 0:
+				self.optimizer.optimizer = self.lr_scheduler(
+					self.optimizer.optimizer, step, init_lr=self.learning_rate_init,
+					peak_lr=self.learning_rate, warmup_steps=self.lr_warmup_steps)
+			# print lr
 			for param_group in self.optimizer.optimizer.param_groups:
 				log.info('epoch:{} lr: {}'.format(epoch, param_group['lr']))
 				lr_curr = param_group['lr']

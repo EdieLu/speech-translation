@@ -231,7 +231,6 @@ def validate_config(config):
 	return config
 
 
-
 def get_base_hidden(hidden):
 
 	""" strip the nested tuple, get the last hidden state """

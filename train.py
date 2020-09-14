@@ -51,10 +51,11 @@ def load_arguments(parser):
 
 	# paths-asr
 	parser.add_argument('--asr_data_ratio', type=float, default=1.0, help='data partition being used')
-	parser.add_argument('--asr_acous_norm_path', type=str, default=None, help='asr acoustics norm')
+	parser.add_argument('--asr_train_acous_norm_path', type=str, default=None, help='asr train acoustics norm')
 	parser.add_argument('--asr_train_acous_path', type=str, default=None, help='asr train set acoustics')
-	parser.add_argument('--asr_dev_acous_path', type=str, default=None, help='asr dev set acoustics')
 	parser.add_argument('--asr_train_path_src', type=str, default=None, help='asr train src dir')
+	parser.add_argument('--asr_dev_acous_norm_path', type=str, default=None, help='asr dev acoustics norm')
+	parser.add_argument('--asr_dev_acous_path', type=str, default=None, help='asr dev set acoustics')
 	parser.add_argument('--asr_dev_path_src', type=str, default=None, help='asr dev src dir')
 
 	# paths-mt
@@ -97,6 +98,8 @@ def load_arguments(parser):
 	parser.add_argument('--embedding_dropout', type=float, default=0.0, help='embedding dropout')
 	parser.add_argument('--dropout', type=float, default=0.0, help='dropout')
 	parser.add_argument('--seqrev', type=str, default='False', help='reverse src, tgt sequence')
+	parser.add_argument('--perturb_emb', type=str, default='False', help='add embed perturbation in mode MT')
+	parser.add_argument('--perturb_emb_fraction', type=float, default=0.0, help='perturbation fraction')
 
 	# train
 	parser.add_argument('--random_seed', type=int, default=333, help='random seed')
@@ -200,33 +203,34 @@ def main():
 	mode = config['mode']
 	if 'ST' in mode:
 		# load train set
-		t.logger.info(' -- load ST train set -- ')
-		train_path_src = config['st_train_path_src']
-		train_path_tgt = config['st_train_path_tgt']
-		train_acous_path = config['st_train_acous_path']
-		train_set = Dataset(path_src=train_path_src, path_tgt=train_path_tgt,
-			path_vocab_src=path_vocab_src,
-			path_vocab_tgt=path_vocab_tgt,
-			use_type=config['use_type'],
-			acous_path=train_acous_path,
-			seqrev=config['seqrev'],
-			acous_norm=config['las_acous_norm'],
-			acous_norm_path=config['st_acous_norm_path'],
-			acous_max_len=config['las_acous_max_len'],
-			max_seq_len_src=config['max_seq_len_src'],
-			max_seq_len_tgt=config['max_seq_len_tgt'],
-			batch_size=config['batch_size'],
-			data_ratio=config['st_data_ratio'],
-			use_gpu=config['use_gpu'],
-			mode='ST',
-			logger=t.logger)
+		if config['st_train_path_src']:
+			t.logger.info(' -- load ST train set -- ')
+			train_path_src = config['st_train_path_src']
+			train_path_tgt = config['st_train_path_tgt']
+			train_acous_path = config['st_train_acous_path']
+			train_set = Dataset(path_src=train_path_src, path_tgt=train_path_tgt,
+				path_vocab_src=path_vocab_src,
+				path_vocab_tgt=path_vocab_tgt,
+				use_type=config['use_type'],
+				acous_path=train_acous_path,
+				seqrev=config['seqrev'],
+				acous_norm=config['las_acous_norm'],
+				acous_norm_path=config['st_acous_norm_path'],
+				acous_max_len=config['las_acous_max_len'],
+				max_seq_len_src=config['max_seq_len_src'],
+				max_seq_len_tgt=config['max_seq_len_tgt'],
+				batch_size=config['batch_size'],
+				data_ratio=config['st_data_ratio'],
+				use_gpu=config['use_gpu'],
+				mode='ST',
+				logger=t.logger)
 
-		vocab_size_enc = len(train_set.vocab_src)
-		vocab_size_dec = len(train_set.vocab_tgt)
-		src_word2id = train_set.src_word2id
-		tgt_word2id = train_set.tgt_word2id
-		src_id2word = train_set.src_id2word
-		tgt_id2word = train_set.tgt_id2word
+			vocab_size_enc = len(train_set.vocab_src)
+			vocab_size_dec = len(train_set.vocab_tgt)
+			src_word2id = train_set.src_word2id
+			tgt_word2id = train_set.tgt_word2id
+			src_id2word = train_set.src_id2word
+			tgt_id2word = train_set.tgt_id2word
 
 		# load dev set
 		if config['st_dev_path_src']:
@@ -257,32 +261,33 @@ def main():
 	asr_dev_set = None
 	if 'ASR' in mode:
 		# load train set
-		t.logger.info(' -- load ASR train set -- ')
-		asr_train_path_src = config['asr_train_path_src']
-		asr_train_acous_path = config['asr_train_acous_path']
-		asr_train_set = Dataset(path_src=asr_train_path_src, path_tgt=None,
-			path_vocab_src=path_vocab_src,
-			path_vocab_tgt=path_vocab_tgt,
-			use_type=config['use_type'],
-			acous_path=asr_train_acous_path,
-			acous_norm_path=config['asr_acous_norm_path'],
-			seqrev=config['seqrev'],
-			acous_norm=config['las_acous_norm'],
-			acous_max_len=config['las_acous_max_len'],
-			max_seq_len_src=config['max_seq_len_src'],
-			max_seq_len_tgt=config['max_seq_len_tgt'],
-			batch_size=config['batch_size'],
-			data_ratio=config['asr_data_ratio'],
-			use_gpu=config['use_gpu'],
-			mode='ASR',
-			logger=t.logger)
+		if config['asr_train_path_src']:
+			t.logger.info(' -- load ASR train set -- ')
+			asr_train_path_src = config['asr_train_path_src']
+			asr_train_acous_path = config['asr_train_acous_path']
+			asr_train_set = Dataset(path_src=asr_train_path_src, path_tgt=None,
+				path_vocab_src=path_vocab_src,
+				path_vocab_tgt=path_vocab_tgt,
+				use_type=config['use_type'],
+				acous_path=asr_train_acous_path,
+				acous_norm_path=config['asr_train_acous_norm_path'],
+				seqrev=config['seqrev'],
+				acous_norm=config['las_acous_norm'],
+				acous_max_len=config['las_acous_max_len'],
+				max_seq_len_src=config['max_seq_len_src'],
+				max_seq_len_tgt=config['max_seq_len_tgt'],
+				batch_size=config['batch_size'],
+				data_ratio=config['asr_data_ratio'],
+				use_gpu=config['use_gpu'],
+				mode='ASR',
+				logger=t.logger)
 
-		vocab_size_enc = len(asr_train_set.vocab_src)
-		vocab_size_dec = len(asr_train_set.vocab_tgt)
-		src_word2id = asr_train_set.src_word2id
-		tgt_word2id = asr_train_set.tgt_word2id
-		src_id2word = asr_train_set.src_id2word
-		tgt_id2word = asr_train_set.tgt_id2word
+			vocab_size_enc = len(asr_train_set.vocab_src)
+			vocab_size_dec = len(asr_train_set.vocab_tgt)
+			src_word2id = asr_train_set.src_word2id
+			tgt_word2id = asr_train_set.tgt_word2id
+			src_id2word = asr_train_set.src_id2word
+			tgt_id2word = asr_train_set.tgt_id2word
 
 		# load dev set
 		if config['asr_dev_path_src']:
@@ -294,7 +299,7 @@ def main():
 				path_vocab_tgt=path_vocab_tgt,
 				use_type=config['use_type'],
 				acous_path=asr_dev_acous_path,
-				acous_norm_path=config['asr_acous_norm_path'],
+				acous_norm_path=config['asr_dev_acous_norm_path'],
 				acous_max_len=config['las_acous_max_len'],
 				seqrev=config['seqrev'],
 				acous_norm=config['las_acous_norm'],
@@ -312,32 +317,33 @@ def main():
 	mt_dev_set = None
 	if 'MT' in mode:
 		# load train set
-		t.logger.info(' -- load MT train set -- ')
-		mt_train_path_src = config['mt_train_path_src']
-		mt_train_path_tgt = config['mt_train_path_tgt']
-		mt_train_set = Dataset(path_src=mt_train_path_src, path_tgt=mt_train_path_tgt,
-			path_vocab_src=path_vocab_src,
-			path_vocab_tgt=path_vocab_tgt,
-			use_type=config['use_type'],
-			acous_path=None,
-			acous_norm_path=None,
-			seqrev=config['seqrev'],
-			acous_norm=config['las_acous_norm'],
-			acous_max_len=config['las_acous_max_len'],
-			max_seq_len_src=config['max_seq_len_src'],
-			max_seq_len_tgt=config['max_seq_len_tgt'],
-			batch_size=config['batch_size'],
-			data_ratio=config['mt_data_ratio'],
-			use_gpu=config['use_gpu'],
-			mode='MT',
-			logger=t.logger)
+		if config['mt_train_path_src']:
+			t.logger.info(' -- load MT train set -- ')
+			mt_train_path_src = config['mt_train_path_src']
+			mt_train_path_tgt = config['mt_train_path_tgt']
+			mt_train_set = Dataset(path_src=mt_train_path_src, path_tgt=mt_train_path_tgt,
+				path_vocab_src=path_vocab_src,
+				path_vocab_tgt=path_vocab_tgt,
+				use_type=config['use_type'],
+				acous_path=None,
+				acous_norm_path=None,
+				seqrev=config['seqrev'],
+				acous_norm=config['las_acous_norm'],
+				acous_max_len=config['las_acous_max_len'],
+				max_seq_len_src=config['max_seq_len_src'],
+				max_seq_len_tgt=config['max_seq_len_tgt'],
+				batch_size=config['batch_size'],
+				data_ratio=config['mt_data_ratio'],
+				use_gpu=config['use_gpu'],
+				mode='MT',
+				logger=t.logger)
 
-		vocab_size_enc = len(mt_train_set.vocab_src)
-		vocab_size_dec = len(mt_train_set.vocab_tgt)
-		src_word2id = mt_train_set.src_word2id
-		tgt_word2id = mt_train_set.tgt_word2id
-		src_id2word = mt_train_set.src_id2word
-		tgt_id2word = mt_train_set.tgt_id2word
+			vocab_size_enc = len(mt_train_set.vocab_src)
+			vocab_size_dec = len(mt_train_set.vocab_tgt)
+			src_word2id = mt_train_set.src_word2id
+			tgt_word2id = mt_train_set.tgt_word2id
+			src_id2word = mt_train_set.src_id2word
+			tgt_id2word = mt_train_set.tgt_id2word
 
 		# load dev set
 		if config['mt_dev_path_src']:
@@ -405,7 +411,11 @@ def main():
 					acous_hidden_size=config['las_acous_hidden_size'],
 					#
 					mode=config['mode'],
-					load_mode=config['load_mode'])
+					load_mode=config['load_mode'],
+					#
+					perturb_emb=config['perturb_emb'],
+					perturb_emb_fraction=config['perturb_emb_fraction']
+					)
 	seq2seq = seq2seq.to(device=device)
 
 	# run training

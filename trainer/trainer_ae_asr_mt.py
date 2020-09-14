@@ -166,6 +166,7 @@ class Trainer_AE_ASR_MT(Trainer):
 					preds_ae = out_dict['preds_ae']
 					logps_ae = out_dict['logps_ae']
 					emb_ae = out_dict['emb_ae']
+					refs_ae = out_dict['refs_ae']
 					logps_hyp_asr = logps_asr
 					preds_hyp_asr = preds_asr
 					emb_hyp_asr = emb_asr
@@ -179,10 +180,10 @@ class Trainer_AE_ASR_MT(Trainer):
 							src_ids[:, 1:].reshape(-1))
 						loss_asr.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
 						loss_ae.eval_batch(logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)),
-							src_ids[:, 1:].reshape(-1))
+							refs_ae.reshape(-1))
 						loss_ae.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
-						loss_kl.eval_batch(logps_hyp_asr.reshape(-1, logps_hyp_asr.size(-1)),
-							logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)))
+						loss_kl.eval_batch(logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)),
+							logps_hyp_asr.reshape(-1, logps_hyp_asr.size(-1)))
 						loss_kl.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
 						loss_l2.eval_batch(emb_hyp_asr.reshape(-1, emb_hyp_asr.size(-1)),
 							emb_hyp_ae.reshape(-1, emb_hyp_ae.size(-1)))
@@ -193,10 +194,10 @@ class Trainer_AE_ASR_MT(Trainer):
 							src_ids[:,1:].reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
 						loss_asr.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
 						loss_ae.eval_batch_with_mask(logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)),
-							src_ids[:,1:].reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
+							refs_ae.reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
 						loss_ae.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
-						loss_kl.eval_batch_with_mask(logps_hyp_asr.reshape(-1, logps_hyp_asr.size(-1)),
-							logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)),
+						loss_kl.eval_batch_with_mask(logps_hyp_ae.reshape(-1, logps_hyp_ae.size(-1)),
+							logps_hyp_asr.reshape(-1, logps_hyp_asr.size(-1)),
 							non_padding_mask_src[:,1:].reshape(-1))
 						loss_kl.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
 						loss_l2.eval_batch_with_mask(emb_hyp_asr.reshape(-1, emb_hyp_asr.size(-1)),
@@ -230,21 +231,25 @@ class Trainer_AE_ASR_MT(Trainer):
 					total_asr += non_padding_mask_src[:,1:].sum().item()
 
 					seqres_ae = preds_hyp_ae
-					correct_ae = seqres_ae.reshape(-1).eq(src_ids[:,1:].reshape(-1))\
+					correct_ae = seqres_ae.reshape(-1).eq(refs_ae.reshape(-1))\
 						.masked_select(non_padding_mask_src[:,1:].reshape(-1)).sum().item()
 					match_ae += correct_ae
 					total_ae += non_padding_mask_src[:,1:].sum().item()
 
+					# append to refs_ae
+					dummy = torch.zeros(refs_ae.size(0),1).to(device=self.device).long()
+					refs_ae_add = torch.cat((dummy, refs_ae),dim=1)
+
 					# print
 					out_count = self._print(out_count, src_ids,
 						dataset_asr.src_id2word, seqres_asr, tail='-asr')
-					out_count_dummy = self._print(out_count, src_ids,
+					out_count_dummy = self._print(out_count, refs_ae_add,
 						dataset_asr.src_id2word, seqres_ae, tail='-ae ')
 
 					# accumulate corpus
 					hyp_corpus_asr, ref_corpus_asr = add2corpus(seqres_asr, src_ids,
 						dataset_asr.src_id2word, hyp_corpus_asr, ref_corpus_asr, type='word')
-					hyp_corpus_ae, ref_corpus_ae = add2corpus(seqres_ae, src_ids,
+					hyp_corpus_ae, ref_corpus_ae = add2corpus(seqres_ae, refs_ae_add,
 						dataset_asr.src_id2word, hyp_corpus_ae, ref_corpus_ae, type='word')
 
 		# ------- MT --------
@@ -450,6 +455,7 @@ class Trainer_AE_ASR_MT(Trainer):
 			emb_asr = out_dict['emb_asr']
 			logps_ae = out_dict['logps_ae']
 			emb_ae = out_dict['emb_ae']
+			refs_ae = out_dict['refs_ae']
 
 			# import pdb; pdb.set_trace()
 			# Get loss
@@ -458,10 +464,10 @@ class Trainer_AE_ASR_MT(Trainer):
 					src_ids[:, 1:].reshape(-1))
 				loss_asr.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
 				loss_ae.eval_batch(logps_ae.reshape(-1, logps_ae.size(-1)),
-					src_ids[:, 1:].reshape(-1))
+					refs_ae.reshape(-1))
 				loss_ae.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
-				loss_kl.eval_batch(logps_asr.reshape(-1, logps_asr.size(-1)),
-					logps_ae.reshape(-1, logps_ae.size(-1)))
+				loss_kl.eval_batch(logps_ae.reshape(-1, logps_ae.size(-1)),
+					logps_asr.reshape(-1, logps_asr.size(-1)))
 				loss_kl.norm_term = 1.0 * src_ids.size(0) * src_ids[:,1:].size(1)
 				loss_l2.eval_batch(emb_asr.reshape(-1, emb_asr.size(-1)),
 					emb_ae.reshape(-1, emb_ae.size(-1)))
@@ -471,10 +477,10 @@ class Trainer_AE_ASR_MT(Trainer):
 					src_ids[:,1:].reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
 				loss_asr.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
 				loss_ae.eval_batch_with_mask(logps_ae.reshape(-1, logps_ae.size(-1)),
-					src_ids[:,1:].reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
+					refs_ae.reshape(-1), non_padding_mask_src[:,1:].reshape(-1))
 				loss_ae.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
-				loss_kl.eval_batch_with_mask(logps_asr.reshape(-1, logps_asr.size(-1)),
-					logps_ae.reshape(-1, logps_ae.size(-1)),
+				loss_kl.eval_batch_with_mask(logps_ae.reshape(-1, logps_ae.size(-1)),
+					logps_asr.reshape(-1, logps_asr.size(-1)),
 					non_padding_mask_src[:,1:].reshape(-1))
 				loss_kl.norm_term = 1.0 * torch.sum(non_padding_mask_src[:,1:])
 				loss_l2.eval_batch_with_mask(emb_asr.reshape(-1, emb_asr.size(-1)),
@@ -624,6 +630,12 @@ class Trainer_AE_ASR_MT(Trainer):
 		# loop over epochs
 		for epoch in range(start_epoch, n_epochs + 1):
 
+			# update lr
+			if self.lr_warmup_steps != 0:
+				self.optimizer.optimizer = self.lr_scheduler(
+					self.optimizer.optimizer, step, init_lr=self.learning_rate_init,
+					peak_lr=self.learning_rate, warmup_steps=self.lr_warmup_steps)
+			# print lr
 			for param_group in self.optimizer.optimizer.param_groups:
 				log.info('epoch:{} lr: {}'.format(epoch, param_group['lr']))
 				lr_curr = param_group['lr']

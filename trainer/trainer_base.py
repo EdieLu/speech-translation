@@ -180,9 +180,10 @@ class Trainer(object):
 				model (seq2seq.models): trained model.
 		"""
 
-		# torch.cuda.empty_cache()
-		if self.load_mode == 'resume' or self.load_mode == 'restart':
 
+		if 'resume' in self.load_mode or 'restart' in self.load_mode:
+
+			# resume training
 			latest_checkpoint_path = self.load_dir
 			self.logger.info('resuming {} ...'.format(latest_checkpoint_path))
 			resume_checkpoint = Checkpoint.load(latest_checkpoint_path)
@@ -197,26 +198,42 @@ class Trainer(object):
 			defaults.pop('initial_lr', None)
 			self.optimizer.optimizer = resume_optim.__class__(model.parameters(), **defaults)
 
+			# set freeze param
 			for name, param in model.named_parameters():
 				log = self.logger.info('{}:{}'.format(name, param.size()))
-				if 'las.encoder' in name and self.load_freeze:
-					log = self.logger.info('freezed')
-					param.requires_grad = False
 
-			if self.load_mode == 'resume':
+				# various mode
+				if self.load_mode == 'ASR-resume' and self.load_freeze:
+					# freeze LAS
+					if 'las' in name:
+							log = self.logger.info('freezed')
+							param.requires_grad = False
+
+				elif self.load_mode == 'AE-ASR-resume' and self.load_freeze:
+					# freeze LAS and EN embedder
+					if 'las' in name or 'enc_embedder' in name:
+							log = self.logger.info('freezed')
+							param.requires_grad = False
+
+			# set step/epoch
+			if 'resume' in self.load_mode:
 				# start from prev
 				start_epoch = resume_checkpoint.epoch # start from the saved epoch!
 				step = resume_checkpoint.step# start from the saved step!
-			elif self.load_mode == 'restart':
+			elif 'restart' in self.load_mode:
 				# just for the sake of finetuning
 				start_epoch = 1
 				step = 0
 
 		else:
 
+			# all are init from start
 			if self.load_mode == 'LAS':
 
-				""" load LAS pyramidal LSTM from old dir """
+				"""
+					load LAS pyramidal LSTM from old dir
+					freeze: only the pyramidal LSTMs in AcousEnc
+				"""
 
 				las_checkpoint_path = self.load_dir
 				self.logger.info('loading Pyramidal lstm {} ...'.format(las_checkpoint_path))
@@ -239,7 +256,7 @@ class Trainer(object):
 							param.data = las_param.data
 							self.logger.info('loading {}'.format(las_name))
 							loaded = True
-							if self.load_freeze: # freezing embedder too
+							if self.load_freeze:
 								self.logger.info('freezed')
 								param.requires_grad = False
 							else:
@@ -250,7 +267,10 @@ class Trainer(object):
 
 			elif self.load_mode == 'ASR':
 
-				""" load ASR model: compatible only with asr-v001 model """
+				"""
+					load ASR model: compatible only with asr-v001 model
+					freeze: AcousEnc+EnDec (Entire LAS model)
+				"""
 
 				asr_checkpoint_path = self.load_dir
 				self.logger.info('loading ASR {} ...'.format(asr_checkpoint_path))
@@ -291,9 +311,58 @@ class Trainer(object):
 							self.logger.info('not preloaded - {}'.format(name))
 					# import pdb; pdb.set_trace()
 
+			elif self.load_mode == 'ASR-PARTIAL':
+
+				"""
+					load ASR model: compatible only with (ted-)asr-v001 model
+					freeze: AcousEnc (LAS model excluding las.decoder.acous_out)
+				"""
+
+				asr_checkpoint_path = self.load_dir
+				self.logger.info('loading ASR {} ...'.format(asr_checkpoint_path))
+				asr_checkpoint = Checkpoint.load(asr_checkpoint_path)
+				asr_model = asr_checkpoint.model
+				# assign param
+				for name, param in model.named_parameters():
+					loaded = False
+					log = self.logger.info('{}:{}'.format(name, param.size()))
+					# name = las.encoder.acous_enc_l1.weight_ih_l0
+					name_init = '.'.join(name.split('.')[0:1])
+					name_rest = '.'.join(name.split('.')[1:])
+
+					for asr_name, asr_param in asr_model.named_parameters():
+						if name_init == 'las' and name == asr_name:
+							assert param.data.size() == asr_param.data.size()
+							param.data = asr_param.data
+							loaded = True
+							self.logger.info('loading {}'.format(asr_name))
+							if self.load_freeze and ('las.decoder.acous_out' not in name):
+								self.logger.info('freezed')
+								param.requires_grad = False
+							else:
+								self.logger.info('not freezed')
+					if not loaded:
+						# make exception for las dec embedder
+						if name == 'las.decoder.embedder.weight':
+							model.las.decoder.embedder.weight.data = \
+								asr_model.enc_embedder.weight.data
+							self.logger.info('assigning {} with {}'.format(
+								'las.decoder.embedder.weight', 'enc_embedder.weight'))
+							if self.load_freeze:
+								self.logger.info('freezed')
+								param.requires_grad = False
+							else:
+								self.logger.info('not freezed')
+						else:
+							self.logger.info('not preloaded - {}'.format(name))
+					# import pdb; pdb.set_trace()
+
 			elif self.load_mode == 'AE-ASR':
 
-				""" load AE-ASR model """
+				"""
+					load AE-ASR model
+					freeze: entire AcousEnc+EnDec+EnEnc
+				"""
 
 				aeasr_checkpoint_path = self.load_dir
 				self.logger.info('loading AE-ASR model {} ...'.format(aeasr_checkpoint_path))
@@ -320,7 +389,10 @@ class Trainer(object):
 
 			elif self.load_mode == 'AE-ASR-MT':
 
-				""" load general models - lock LAS LSTM """
+				"""
+					load general models
+					freeze: entire AcousEnc+EnDec
+				"""
 
 				checkpoint_path = self.load_dir
 				self.logger.info('loading model {} ...'.format(checkpoint_path))
