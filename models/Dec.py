@@ -1,5 +1,7 @@
 import random
 import numpy as np
+import os
+import math
 
 import torch
 import torch.nn as nn
@@ -42,6 +44,8 @@ class Dec(nn.Module):
 		word2id=None,
 		id2word=None,
 		hard_att=False,
+		#
+		train_rnnlm=False
 		):
 
 		super(Dec, self).__init__()
@@ -58,6 +62,7 @@ class Dec(nn.Module):
 		self.residual = residual
 		self.max_seq_len = max_seq_len
 
+
 		# use shared embedding + vocab
 		self.vocab_size = vocab_size
 		self.embedding_size = embedding_size
@@ -73,6 +78,16 @@ class Dec(nn.Module):
 		else:
 			self.embedder = nn.Embedding(self.vocab_size, self.embedding_size,
 				sparse=False, padding_idx=PAD)
+
+		# ------ define rnnlm --------
+		self.train_rnnlm = train_rnnlm
+		if self.train_rnnlm:
+			self.rnnlm = torch.nn.LSTM(
+				self.embedding_size, self.hidden_size_shared,
+				num_layers=1, batch_first=batch_first,
+				bias=True, dropout=dropout, bidirectional=False)
+			self.rnnlm_ffn = nn.Linear(self.hidden_size_shared * 2,
+				self.hidden_size_shared, bias=False)
 
 		# ------ define acous att --------
 		dropout_acous_att = dropout
@@ -127,7 +142,7 @@ class Dec(nn.Module):
 
 	def forward(self, acous_outputs, acous_lens=None, tgt=None,
 		hidden=None, is_training=False, teacher_forcing_ratio=0.0,
-		beam_width=1, use_gpu=False):
+		beam_width=1, use_gpu=False, lm_mode='null', lm_model=None):
 
 		"""
 			Args:
@@ -144,6 +159,11 @@ class Dec(nn.Module):
 
 		global device
 		device = check_device(use_gpu)
+
+		# check lm mode
+		self.check_var('train_rnnlm', False)
+		mode = lm_mode.split('_')[0]
+		if mode == 's-4g': assert type(lm_model) != type(None)
 
 		# 0. init var
 		ret_dict = dict()
@@ -201,12 +221,29 @@ class Dec(nn.Module):
 			batch_size, 1, max_seq_len).to(device=device)
 		sequence_embs = []
 		for idx in range(max_seq_len - 1):
+
 			# import pdb; pdb.set_trace()
+
+			# prep for deep lm fusion - use ref/hyp
+			if use_teacher_forcing:
+				prev_seq_symbols = tgt[:, :idx+1]
+			else:
+				sequence_symbols_mod = sequence_symbols[:]
+				sequence_symbols_mod.insert(0,tgt[:,0].unsqueeze(1))
+				prev_seq_symbols = torch.cat(sequence_symbols_mod, dim=1) # b x len
+
+			# forward step
 			predicted_logsoftmax, dec_hidden, step_attn, c_out, cell_value, attn_output, logits = \
 				self.forward_step(self.acous_att, self.acous_ffn, self.acous_out,
 								att_keys, att_vals, tgt_chunk, cell_value,
-								dec_hidden, mask, prev_c)
+								dec_hidden, mask, prev_c, prev_seq_symbols)
 			predicted_logsoftmax = predicted_logsoftmax.squeeze(1) # [b, vocab_size]
+
+			# add shallow lm fusion (only in decoding)
+			predicted_logsoftmax = self.add_lm(lm_mode, lm_model,
+				predicted_logsoftmax, sequence_symbols)
+
+			# decode as usual
 			step_output = predicted_logsoftmax
 			symbols, decoder_outputs, sequence_symbols, lengths = \
 				self.decode(idx, step_output, decoder_outputs, sequence_symbols, lengths)
@@ -225,6 +262,109 @@ class Dec(nn.Module):
 		# import pdb; pdb.set_trace()
 
 		return sequence_embs, sequence_logps, sequence_symbols, lengths
+
+
+	def add_lm(self, lm_mode, lm_model, logps, sequence_symbols):
+
+		"""
+			add shallow language model fusion to nn posterior
+			logps: b x vocab_size
+			sequence_symbols: b x len (len: length decoded so far)
+			alpha: scale factor
+
+			--- [s-4g] ---
+			lm trained on - <s> <s> <s> w1 w2 w3 w4 </s> </s> </s>
+			lm scores - w1 w2 w3 w4 </s>
+				w1 - no change
+				w2 | w1 - bg
+				w3 | w1,w2 - tg
+				w4 | w1,w2,w3 - fg
+				w5 | w2,w3,w4 - fg [all the rest are 4g]
+
+			add pruning - to speed up process:
+				only run LM on top 10 candidates (ok - since not doing beamsearch)
+
+			--- [s-rnn] ---
+			lm trained with 1layer unilstm
+
+		"""
+		# import pdb; pdb.set_trace()
+
+		# no lm
+		if lm_mode == 'null':
+			return logps
+
+		# add explicit lm
+		mode = lm_mode.split('_')[0]
+		alpha = float(lm_mode.split('_')[-1])
+
+		if mode == 's-4g':
+
+			# combined logp
+			comblogps = []
+
+			if len(sequence_symbols) == 0:
+				# if no context
+				pass
+			else:
+				# combine if with context
+				sequence_symbols_cat = torch.cat(sequence_symbols, dim=1) # b x len
+
+			# loop over the batch
+			for idx in range(logps.size(0)):
+				# original [vocab_size]
+				logp = logps[idx]
+				# get context
+				if len(sequence_symbols) == 0:
+					context = [str(BOS)]
+				else:
+					idseq = [str(int(elem)) for elem in sequence_symbols_cat[idx]]
+					st = max(0, len(idseq) - 3)
+					context = idseq[st:]
+				# loop over top N candidates
+				N = 10
+				top_idices = logp.topk(N)[1]
+				newlogp_raw = []
+				for j in range(N):
+					query = str(int(top_idices[j]))
+					score = lm_model.logscore(query, context)
+					if math.isinf(score):
+						score = -1e10 # to replace -inf
+					newlogp_raw.append(score)
+
+				# normalise
+				newlogp_raw = torch.FloatTensor(newlogp_raw) # vocab_size
+				newlogp = F.log_softmax(newlogp_raw, dim=0).to(device=device)
+
+				# combine scores
+				comblogp = logp[:].detach()
+				for j in range(N):
+					comblogp[top_idices[j]] = torch.log(torch.exp(logp[top_idices[j]])
+						+ alpha * torch.exp(newlogp[j]))
+				comblogps.append(comblogp)
+
+			comblogps = torch.stack(comblogps, dim=0) # b x vocab_size
+
+		elif mode == 's-rnn':
+
+			# attach BOS
+			batch_size = logps.size(0)
+			bos_seq = torch.Tensor([BOS]).repeat(batch_size,
+				1).type(torch.LongTensor).to(device=device)
+			sequence_symbols_mod = sequence_symbols[:]
+			sequence_symbols_mod.insert(0,bos_seq)
+			sequence_symbols_cat = torch.cat(sequence_symbols_mod, dim=1) # b x len
+
+			# run RNNLM
+			lens = [torch.ones(1) * sequence_symbols_cat.size(1)] * batch_size
+			use_gpu = (device == torch.device('cuda'))
+			newlogps_full, _ = lm_model(sequence_symbols_cat, lens, use_gpu=use_gpu)
+			newlogps = newlogps_full[:,-1] # only use last state
+			comblogps = torch.log(torch.exp(logps) + alpha * torch.exp(newlogps))
+
+
+
+		return comblogps
 
 
 	def decode(self, step, step_output, decoder_outputs, sequence_symbols, lengths):
@@ -253,7 +393,8 @@ class Dec(nn.Module):
 
 	def forward_step(self, att_func, ffn_func, out_func,
 		att_keys, att_vals, tgt_chunk, prev_cell_value,
-		dec_hidden=None, mask_src=None, prev_c=None):
+		dec_hidden=None, mask_src=None, prev_c=None,
+		prev_seq_symbols=None):
 
 		"""
 			manual unrolling
@@ -338,11 +479,23 @@ class Dec(nn.Module):
 		att_outputs, attn, c_out = att_func(dec_outputs, att_keys, att_vals, prev_c=prev_c)
 		att_outputs = self.dropout(att_outputs)
 
-		# run ff + softmax
+		# run ffn1
 		ff_inputs = torch.cat((att_outputs, dec_outputs), dim=-1)
 		ff_inputs_size = self.acous_hidden_size * 2 + self.hidden_size_dec
-		cell_value = ffn_func(ff_inputs.view(-1, 1, ff_inputs_size))
-		outputs = out_func(cell_value.contiguous().view(-1, self.hidden_size_shared))
-		predicted_logsoftmax = F.log_softmax(outputs, dim=1).view(batch_size, 1, -1)
+		cell_value = ffn_func(ff_inputs.view(-1, 1, ff_inputs_size)) # ffn
+
+		# import pdb; pdb.set_trace()
+		# deep rnnlm fusion
+		if self.train_rnnlm:
+
+			prev_seq_emb = self.embedding_dropout(self.embedder(prev_seq_symbols))
+			lm_outputs, _ = self.rnnlm(prev_seq_emb) # b x len x hidden_size_shared
+			last_lm_outputs = lm_outputs[:,-1].unsqueeze(1) # b x 1 x hidden_size_shared
+			cell_value_comb = torch.cat((cell_value, last_lm_outputs), dim=2)
+			cell_value = self.rnnlm_ffn(cell_value_comb)
+
+		# run ffn2 + softmax
+		outputs = out_func(cell_value.contiguous().view(-1, self.hidden_size_shared)) # b x vocab
+		predicted_logsoftmax = F.log_softmax(outputs, dim=1).view(batch_size, 1, -1) # bx1x vocab
 
 		return predicted_logsoftmax, dec_hidden, attn, c_out, cell_value, att_outputs, outputs

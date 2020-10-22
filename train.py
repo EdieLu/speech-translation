@@ -100,6 +100,8 @@ def load_arguments(parser):
 	parser.add_argument('--seqrev', type=str, default='False', help='reverse src, tgt sequence')
 	parser.add_argument('--perturb_emb', type=str, default='False', help='add embed perturbation in mode MT')
 	parser.add_argument('--perturb_emb_fraction', type=float, default=0.0, help='perturbation fraction')
+	parser.add_argument('--train_rnnlm', type=str, default='False',
+		help='whether or not using deep rnnlm fusion in LAS')
 
 	# train
 	parser.add_argument('--random_seed', type=int, default=333, help='random seed')
@@ -414,7 +416,9 @@ def main():
 					load_mode=config['load_mode'],
 					#
 					perturb_emb=config['perturb_emb'],
-					perturb_emb_fraction=config['perturb_emb_fraction']
+					perturb_emb_fraction=config['perturb_emb_fraction'],
+					#
+					train_rnnlm=config['train_rnnlm']
 					)
 	seq2seq = seq2seq.to(device=device)
 

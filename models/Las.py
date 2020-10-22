@@ -42,7 +42,8 @@ class LAS(nn.Module):
 		embedder=None,
 		word2id=None,
 		id2word=None,
-		hard_att=False
+		hard_att=False,
+		train_rnnlm=False
 		):
 
 		super(LAS, self).__init__()
@@ -75,7 +76,8 @@ class LAS(nn.Module):
 			embedder=embedder,
 			word2id=word2id,
 			id2word=id2word,
-			hard_att=hard_att
+			hard_att=hard_att,
+			train_rnnlm=train_rnnlm
 		)
 
 
@@ -90,7 +92,7 @@ class LAS(nn.Module):
 
 	def forward(self, acous_feats, acous_lens=None, tgt=None,
 		hidden=None, is_training=False, teacher_forcing_ratio=0.0,
-		beam_width=1, use_gpu=False):
+		beam_width=1, use_gpu=False, lm_mode='null', lm_model=None):
 
 		"""
 			Args:
@@ -116,7 +118,8 @@ class LAS(nn.Module):
 			acous_outputs, acous_lens=acous_lens, tgt=tgt,
 			is_training=is_training,
 			teacher_forcing_ratio=teacher_forcing_ratio,
-			beam_width=beam_width, use_gpu=use_gpu
+			beam_width=beam_width, use_gpu=use_gpu,
+			lm_mode=lm_mode, lm_model=lm_model
 		)
 
 		return sequence_embs, sequence_logps, sequence_symbols, lengths

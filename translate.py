@@ -6,6 +6,7 @@ import logging
 import argparse
 import sys
 import numpy as np
+import dill as pickle
 
 from utils.dataset import Dataset
 from utils.misc import save_config, validate_config, check_device
@@ -46,6 +47,7 @@ def load_arguments(parser):
 	parser.add_argument('--use_gpu', type=str, default='False', help='whether or not using GPU')
 	parser.add_argument('--eval_mode', type=int, default=2, help='which evaluation mode to use')
 	parser.add_argument('--gen_mode', type=str, default='ASR', help='AE|ASR|MT|ST')
+	parser.add_argument('--lm_mode', type=str, default='null', help='null|s-4g|s-rnn|d')
 	parser.add_argument('--seqrev', type=str, default=False, help='whether or not to reverse sequence')
 
 	return parser
@@ -53,7 +55,7 @@ def load_arguments(parser):
 
 def translate(test_set, model, test_path_out, use_gpu,
 	max_seq_len, beam_width, device, seqrev=False,
-	gen_mode='ASR', history='HYP'):
+	gen_mode='ASR', lm_mode='null', history='HYP'):
 
 	"""
 		no reference tgt given - Run translation.
@@ -76,6 +78,30 @@ def translate(test_set, model, test_path_out, use_gpu,
 
 	print('max seq len {}'.format(max_seq_len))
 	sys.stdout.flush()
+
+	# load lm
+	mode = lm_mode.split('_')[0]
+	if mode == 'null':
+		lm_model = None
+		LM_PATH = None
+	elif mode == 's-4g':
+		corpus = lm_mode.split('_')[1]
+		LM_BASE = '/home/alta/BLTSpeaking/exp-ytl28/projects/lib/lms/pkl/'
+		if corpus == 'ted':
+			LM_PATH = os.path.join(LM_BASE, 'idlm-ted-train.pkl')
+		elif corpus =='mustc':
+			LM_PATH = os.path.join(LM_BASE, 'idlm-mustc-train.pkl')
+		with open(LM_PATH, 'rb') as fin: lm_model = pickle.load(fin)
+	elif mode == 's-rnn':
+		corpus = lm_mode.split('_')[1]
+		LM_BASE = '/home/alta/BLTSpeaking/exp-ytl28/projects/rnnlm'
+		if corpus == 'ted':
+			LM_PATH = os.path.join(LM_BASE, 'models/ted-v001/checkpoints-combine/combine')
+		elif corpus == 'mustc':
+			LM_PATH = os.path.join(LM_BASE, 'models/mustc-v001/checkpoints-combine/combine')
+		ckpt = Checkpoint.load(LM_PATH)
+		lm_model = ckpt.model.to(device)
+	print('LM {} - {} loaded'.format(lm_mode, LM_PATH))
 
 	# load test
 	test_set.construct_batches(is_train=False)
@@ -125,12 +151,14 @@ def translate(test_set, model, test_path_out, use_gpu,
 						preds = model.forward_translate(acous_feats=acous_feats_sub,
 							acous_lens=acous_lengths_sub, src=src_ids_sub,
 							beam_width=beam_width, use_gpu=use_gpu,
-							max_seq_len=max_seq_len, mode=gen_mode)
+							max_seq_len=max_seq_len, mode=gen_mode,
+							lm_mode=lm_mode, lm_model=lm_model)
 					elif history == 'REF':
 						preds = model.forward_translate_refen(acous_feats=acous_feats_sub,
 							acous_lens=acous_lengths_sub, src=src_ids_sub,
 							beam_width=beam_width, use_gpu=use_gpu,
-							max_seq_len=max_seq_len, mode=gen_mode)
+							max_seq_len=max_seq_len, mode=gen_mode,
+							lm_mode=lm_mode, lm_model=lm_model)
 					time2 = time.time()
 					print('comp time: ', time2-time1)
 
@@ -469,7 +497,8 @@ def compute_kl(test_set, model, test_path_out, use_gpu, max_seq_len, device):
 				refs_ae = out_dict['refs_ae'][:,:max_len-1]
 				src_ids_sub = src_ids_sub[:,:max_len]
 				non_padding_mask_src = src_ids_sub.data.ne(PAD)
-				import pdb; pdb.set_trace()
+
+				# import pdb; pdb.set_trace()
 
 				# various losses
 				loss_asr = NLLLoss()
@@ -590,9 +619,9 @@ def main():
 						seqrev=seqrev,
 						acous_norm=config['acous_norm'],
 						acous_norm_path=config['acous_norm_path'],
-						acous_max_len=6000,
+						acous_max_len=6000, # max 50k for mustc trainset
 						max_seq_len_src=900,
-						max_seq_len_tgt=900,
+						max_seq_len_tgt=900, # max 2.5k for mustc trainset
 						batch_size=batch_size,
 						mode='ST',
 						use_gpu=use_gpu)
@@ -609,11 +638,14 @@ def main():
 		gen_mode = config['gen_mode']
 		history = 'HYP'
 
+	# add external language model
+	lm_mode = config['lm_mode']
+
 	# run eval:
 	if MODE == 1:
 		translate(test_set, model, test_path_out, use_gpu,
 			max_seq_len, beam_width, device, seqrev=seqrev,
-			gen_mode=gen_mode, history=history)
+			gen_mode=gen_mode, lm_mode=lm_mode, history=history)
 
 	elif MODE == 2: # save combined model
 		ckpt = Checkpoint(model=model,

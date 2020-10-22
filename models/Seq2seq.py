@@ -60,7 +60,8 @@ class Seq2seq(nn.Module):
 		load_mode='ASR', # useful for storing frozen var
 		# other
 		perturb_emb=False,
-		perturb_emb_fraction=0.0
+		perturb_emb_fraction=0.0,
+		train_rnnlm=False
 		):
 
 		super(Seq2seq, self).__init__()
@@ -170,7 +171,8 @@ class Seq2seq(nn.Module):
 				embedder=None, # do not share embedder with text encoder
 				word2id=self.enc_word2id,
 				id2word=self.enc_id2word,
-				hard_att=False
+				hard_att=False,
+				train_rnnlm=train_rnnlm
 			)
 
 		# En decode
@@ -233,11 +235,12 @@ class Seq2seq(nn.Module):
 
 
 	def _encoder_acous(self, acous_feats, acous_lens, device, use_gpu, tgt=None,
-		is_training=False, teacher_forcing_ratio=0.0):
+		is_training=False, teacher_forcing_ratio=0.0, lm_mode='null', lm_model=None):
 		# get acoustics - [batch_size, acous_len / 8, self.acous_hidden_size * 2]
 		emb_src, logps_src, preds_src, lengths = self.las(acous_feats,
 			acous_lens=acous_lens, tgt=tgt, is_training=is_training,
-			teacher_forcing_ratio=teacher_forcing_ratio, use_gpu=use_gpu)
+			teacher_forcing_ratio=teacher_forcing_ratio, use_gpu=use_gpu,
+			lm_mode=lm_mode, lm_model=lm_model)
 
 		return emb_src, logps_src, preds_src, lengths
 
@@ -258,12 +261,13 @@ class Seq2seq(nn.Module):
 		return logits_src, logps_src, preds_src, scores_src
 
 
-	def _decoder_de(self, emb_tgt, enc_outputs, tgt_mask=None, src_mask=None):
+	def _decoder_de(self, emb_tgt, enc_outputs,
+		tgt_mask=None, src_mask=None, beam_width=1):
 		# De decoder
 		dec_outputs_tgt, *_ = self.dec_tgt(emb_tgt, enc_outputs, tgt_mask=tgt_mask, src_mask=src_mask)
 		logits_tgt = self.out_tgt(dec_outputs_tgt)	# b x len x vocab_size
 		logps_tgt = torch.log_softmax(logits_tgt, dim=2)
-		scores_tgt, preds_tgt = logps_tgt.data.topk(1)
+		scores_tgt, preds_tgt = logps_tgt.data.topk(beam_width)
 
 		return dec_outputs_tgt, logits_tgt, logps_tgt, preds_tgt, scores_tgt
 
@@ -404,7 +408,7 @@ class Seq2seq(nn.Module):
 
 
 	def forward_train(self, src, tgt=None, acous_feats=None, acous_lens=None,
-		mode='ST', use_gpu=True):
+		mode='ST', use_gpu=True, lm_mode='null', lm_model=None):
 
 		"""
 			mode: 	ASR 		acous -> src
@@ -439,7 +443,8 @@ class Seq2seq(nn.Module):
 				out: w1 w2 w3 <EOS> <PAD> <PAD> #=6
 			"""
 			emb_src, logps_src, preds_src, lengths = self._encoder_acous(acous_feats, acous_lens,
-				device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0)
+				device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0,
+				lm_mode=lm_mode, lm_model=lm_model)
 
 			# output dict
 			out_dict['emb_asr'] = emb_src
@@ -460,7 +465,8 @@ class Seq2seq(nn.Module):
 			else:
 				# run asr: by default
 				_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens,
-					device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0)
+					device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0,
+					lm_mode=lm_mode, lm_model=lm_model)
 				src_trim = preds_src.squeeze(2)
 
 			# from src: use with NLL loss
@@ -515,9 +521,13 @@ class Seq2seq(nn.Module):
 			if 'ASR' in mode:
 				emb_src = out_dict['emb_asr']
 				lengths = out_dict['lengths_asr']
-			else:
+			# else:
+			# 	emb_src, _, _, lengths = self._encoder_acous(acous_feats, acous_lens,
+			# 		device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0)
+			else: # use free running if no 'ASR'
 				emb_src, _, _, lengths = self._encoder_acous(acous_feats, acous_lens,
-					device, use_gpu, tgt=src, is_training=True, teacher_forcing_ratio=1.0)
+					device, use_gpu, is_training=False, teacher_forcing_ratio=0.0,
+					lm_mode=lm_mode, lm_model=lm_model)
 			# get mask
 			max_len = emb_src.size(1)
 			lengths = torch.LongTensor(lengths)
@@ -537,7 +547,8 @@ class Seq2seq(nn.Module):
 		return out_dict
 
 
-	def forward_eval(self, src=None, acous_feats=None, acous_lens=None, mode='ST', use_gpu=True):
+	def forward_eval(self, src=None, acous_feats=None, acous_lens=None,
+		mode='ST', use_gpu=True, lm_mode='null', lm_model=None):
 
 		"""
 			beam_width = 1
@@ -571,7 +582,8 @@ class Seq2seq(nn.Module):
 			"""
 			# run asr
 			emb_src, logps_src, preds_src, lengths = self._encoder_acous(acous_feats, acous_lens,
-				device, use_gpu, is_training=False, teacher_forcing_ratio=0.0)
+				device, use_gpu, is_training=False, teacher_forcing_ratio=0.0,
+				lm_mode=lm_mode, lm_model=lm_model)
 
 			# output dict
 			out_dict['emb_asr'] = emb_src
@@ -592,7 +604,8 @@ class Seq2seq(nn.Module):
 			else:
 				# run asr: by default
 				_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens,
-					device, use_gpu, is_training=False, teacher_forcing_ratio=0.0)
+					device, use_gpu, is_training=False, teacher_forcing_ratio=0.0,
+					lm_mode=lm_mode, lm_model=lm_model)
 				src_trim = preds_src.squeeze(2)
 
 			# from src
@@ -651,7 +664,8 @@ class Seq2seq(nn.Module):
 				lengths = out_dict['lengths_asr']
 			else:
 				emb_src, _, _, lengths = self._encoder_acous(acous_feats, acous_lens, device,
-					use_gpu, is_training=False, teacher_forcing_ratio=0.0)
+					use_gpu, is_training=False, teacher_forcing_ratio=0.0,
+					lm_mode=lm_mode, lm_model=lm_model)
 			# get mask
 			max_len = emb_src.size(1)
 			lengths = torch.LongTensor(lengths)
@@ -684,7 +698,8 @@ class Seq2seq(nn.Module):
 
 
 	def forward_translate(self, acous_feats=None, acous_lens=None, src=None,
-		beam_width=1, penalty_factor=1, use_gpu=True, max_seq_len=900, mode='ST'):
+		beam_width=1, penalty_factor=1, use_gpu=True, max_seq_len=900, mode='ST',
+		lm_mode='null', lm_model=None):
 
 		"""
 			run inference - with beam search (same output format as is in forward_eval)
@@ -698,14 +713,14 @@ class Seq2seq(nn.Module):
 
 		if mode == 'ASR':
 			_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens, device, use_gpu,
-				is_training=False, teacher_forcing_ratio=0.0)
+				is_training=False, teacher_forcing_ratio=0.0, lm_mode=lm_mode, lm_model=lm_model)
 			preds = preds_src
 
 		elif mode == 'AE':
 
 			# run asr: by default
 			_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens, device, use_gpu,
-				is_training=False, teacher_forcing_ratio=0.0)
+				is_training=False, teacher_forcing_ratio=0.0, lm_mode=lm_mode, lm_model=lm_model)
 			src_trim = preds_src.squeeze(2)
 
 			# from src: use with NLL loss
@@ -735,7 +750,8 @@ class Seq2seq(nn.Module):
 				tgt_mask_expand, emb_tgt_expand = self._get_tgt_emb(preds_expand, device)
 				dec_output_expand, logit_expand, logp_expand, pred_expand, score_expand = \
 					self._decoder_de(emb_tgt_expand, enc_outputs_expand,
-					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand)
+					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand,
+					beam_width=beam_width)
 
 				scores_expand, preds_expand, eos_mask, len_map, flag = \
 					self._step_translate(i, batch, beam_width, device,
@@ -752,7 +768,7 @@ class Seq2seq(nn.Module):
 
 			# get embedding
 			emb_src, _, _, lengths = self._encoder_acous(acous_feats, acous_lens, device, use_gpu,
-				is_training=False, teacher_forcing_ratio=0.0)
+				is_training=False, teacher_forcing_ratio=0.0, lm_mode=lm_mode, lm_model=lm_model)
 
 			# get mask
 			max_len = emb_src.size(1)
@@ -777,7 +793,8 @@ class Seq2seq(nn.Module):
 				tgt_mask_expand, emb_tgt_expand = self._get_tgt_emb(preds_expand, device)
 				dec_output_expand, logit_expand, logp_expand, pred_expand, score_expand = \
 					self._decoder_de(emb_tgt_expand, enc_outputs_expand,
-					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand)
+					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand,
+					beam_width=beam_width)
 
 				scores_expand, preds_expand, eos_mask, len_map, flag = \
 					self._step_translate(i, batch, beam_width, device,
@@ -793,7 +810,8 @@ class Seq2seq(nn.Module):
 
 
 	def forward_translate_refen(self, acous_feats=None, acous_lens=None, src=None,
-		beam_width=1, penalty_factor=1, use_gpu=True, max_seq_len=900, mode='ST'):
+		beam_width=1, penalty_factor=1, use_gpu=True, max_seq_len=900, mode='ST',
+		lm_mode='null', lm_model=None):
 
 		"""
 			run inference - with beam search (same output format as is in forward_eval)
@@ -807,7 +825,8 @@ class Seq2seq(nn.Module):
 
 		if mode == 'ASR':
 			_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens,
-				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0)
+				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0,
+				lm_mode=lm_mode, lm_model=lm_model)
 
 			preds = preds_src
 
@@ -815,7 +834,8 @@ class Seq2seq(nn.Module):
 
 			# run asr: by default
 			_, _, preds_src, _ = self._encoder_acous(acous_feats, acous_lens,
-				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0)
+				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0,
+				lm_mode=lm_mode, lm_model=lm_model)
 			src_trim = preds_src.squeeze(2)
 
 			# from src: use with NLL loss
@@ -830,7 +850,8 @@ class Seq2seq(nn.Module):
 
 			# get embedding
 			emb_src, _, _, lengths = self._encoder_acous(acous_feats, acous_lens,
-				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0)
+				device, use_gpu, tgt=src, is_training=False, teacher_forcing_ratio=1.0,
+				lm_mode=lm_mode, lm_model=lm_model)
 
 			# get mask
 			max_len = emb_src.size(1)
@@ -855,7 +876,8 @@ class Seq2seq(nn.Module):
 				tgt_mask_expand, emb_tgt_expand = self._get_tgt_emb(preds_expand, device)
 				dec_output_expand, logit_expand, logp_expand, pred_expand, score_expand = \
 					self._decoder_de(emb_tgt_expand, enc_outputs_expand,
-					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand)
+					tgt_mask=tgt_mask_expand, src_mask=src_mask_input_expand,
+					beam_width=beam_width)
 
 				scores_expand, preds_expand, eos_mask, len_map, flag = \
 					self._step_translate(i, batch, beam_width, device,

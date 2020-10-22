@@ -391,7 +391,7 @@ class Trainer(object):
 
 				"""
 					load general models
-					freeze: entire AcousEnc+EnDec
+					freeze: entire AcousEnc+EnDec+EnEnc
 				"""
 
 				checkpoint_path = self.load_dir
@@ -409,7 +409,40 @@ class Trainer(object):
 							param.data = load_param.data
 							self.logger.info('loading {}'.format(load_name))
 							loaded = True
-							if self.load_freeze and name_init == 'las': # freeze las
+							if self.load_freeze and (name_init == 'las' or
+								name_init == 'enc_embedder'):
+								self.logger.info('freezed')
+								param.requires_grad = False
+							else:
+								self.logger.info('not freezed')
+					if not loaded:
+						self.logger.info('not preloaded - {}'.format(name))
+
+			elif self.load_mode == 'AE-ASR-MT-PARTIAL':
+
+				"""
+					load general models
+					freeze: AcousEnc(only LAS-LSTM, exclude LAS-DEC)
+					won't train: EnDec+EnEnc
+					train: DeDec
+				"""
+
+				checkpoint_path = self.load_dir
+				self.logger.info('loading model {} ...'.format(checkpoint_path))
+				checkpoint = Checkpoint.load(checkpoint_path)
+				load_model = checkpoint.model
+				# assign param
+				for name, param in model.named_parameters():
+					loaded = False
+					log = self.logger.info('{}:{}'.format(name, param.size()))
+					name_init = '.'.join(name.split('.')[:2])
+					for load_name, load_param in load_model.named_parameters():
+						if name == load_name:
+							assert param.data.size() == load_param.data.size()
+							param.data = load_param.data
+							self.logger.info('loading {}'.format(load_name))
+							loaded = True
+							if self.load_freeze and (name_init == 'las.encoder'):
 								self.logger.info('freezed')
 								param.requires_grad = False
 							else:
